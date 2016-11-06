@@ -285,43 +285,6 @@ function escape_js($js)
 }
 
 /**
- * A shell for htmlspecialchars() with $flags defaulting to ENT_QUOTES.
- *
- * @param      string $str The input string
- * @return     string
- * @deprecated in 4.2.0
- * @see        txpspecialchars()
- * @package    Filter
- */
-
-function escape_output($str)
-{
-    trigger_error(gTxt('deprecated_function_with', array('{name}' => __FUNCTION__, '{with}' => 'txpspecialchars')), E_USER_NOTICE);
-
-    return txpspecialchars($str);
-}
-
-/**
- * Replaces &lt; and &gt; characters with entities.
- *
- * @param      string $str The input string
- * @return     string
- * @deprecated in 4.2.0
- * @see        txpspecialchars()
- * @package    Filter
- */
-
-function escape_tags($str)
-{
-    trigger_error(gTxt('deprecated_function', array('{name}' => __FUNCTION__)), E_USER_NOTICE);
-
-    return strtr($str, array(
-        '<' => '&#60;',
-        '>' => '&#62;',
-    ));
-}
-
-/**
  * Escapes CDATA section for an XML document.
  *
  * @param   string $str The string
@@ -406,6 +369,68 @@ function gTxtScript($var, $atts = array(), $route = array())
         $data = is_array($var) ? array_map('gTxt', $var, $atts) : (array) gTxt($var, $atts);
         $textarray_script = $textarray_script + array_combine((array) $var, $data);
     }
+}
+
+/**
+ * Handle refreshing the passed AJAX content to the UI.
+ *
+ * @param  array $partials Partials array
+ * @param  array $rs       Record set of the edited content
+ */
+
+function updatePartials($partials, $rs, $types)
+{
+    if (!is_array($types)) {
+        $types = array($types);
+    }
+
+    foreach ($partials as $k => $p) {
+        if (in_array($p['mode'], $types)) {
+            $cb = $p['cb'];
+            $partials[$k]['html'] = (is_array($cb) ? call_user_func($cb, $rs, $k) : $cb($rs, $k));
+        }
+    }
+
+    return $partials;
+}
+
+/**
+ * Handle refreshing the passed AJAX content to the UI.
+ *
+ * @param  array $partials Partials array
+ * @return array           Response to send back to the browser
+ */
+
+function updateVolatilePartials($partials)
+{
+    $response = array();
+
+    // Update the volatile partials.
+    foreach ($partials as $k => $p) {
+        // Volatile partials need a target DOM selector.
+        if (empty($p['selector']) && $p['mode'] != PARTIAL_STATIC) {
+            trigger_error("Empty selector for partial '$k'", E_USER_ERROR);
+        } else {
+            // Build response script.
+            list($selector, $fragment) = (array)$p['selector'] + array(null, null);
+
+            if (!isset($fragment)) {
+                $fragment = $selector;
+            }
+
+            if ($p['mode'] == PARTIAL_VOLATILE) {
+                // Volatile partials replace *all* of the existing HTML
+                // fragment for their selector with the new one.
+                $response[] = '$("'.$selector.'").replaceWith($("<div>'.escape_js($p['html']).'</div>").find("'.$fragment.'"))';
+            } elseif ($p['mode'] == PARTIAL_VOLATILE_VALUE) {
+                // Volatile partial values replace the *value* of elements
+                // matching their selector.
+                $response[] = '$("'.$selector.'").val("'.escape_js($p['html']).'")';
+            }
+        }
+    }
+
+    return $response;
 }
 
 /**
@@ -584,27 +609,6 @@ function load_lang_event($event, $lang = LANG)
     }
 
     return ($out) ? $out : '';
-}
-
-/**
- * Requires privileges from a user.
- *
- * @deprecated in 4.3.0
- * @see        require_privs()
- * @package    User
- */
-
-function check_privs()
-{
-    trigger_error(gTxt('deprecated_function_with', array('{name}' => __FUNCTION__, '{with}' => 'require_privs')), E_USER_NOTICE);
-    global $txp_user;
-    $privs = safe_field("privs", 'txp_users', "name = '".doSlash($txp_user)."'");
-    $args = func_get_args();
-
-    if (!in_array($privs, $args)) {
-        exit(pageTop('Restricted').'<p style="margin-top:3em;text-align:center">'.
-            gTxt('restricted_area').'</p>');
-    }
 }
 
 /**
@@ -1460,8 +1464,13 @@ function pluginErrorHandler($errno, $errstr, $errfile, $errline)
         return;
     }
 
-    printf('<pre dir="auto">'.gTxt('plugin_load_error').' <b>%s</b> -> <b>%s: %s on line %s</b></pre>',
-        $txp_current_plugin, $error[$errno], $errstr, $errline);
+    printf(
+        '<pre dir="auto">'.gTxt('plugin_load_error').' <b>%s</b> -> <b>%s: %s on line %s</b></pre>',
+        $txp_current_plugin,
+        $error[$errno],
+        $errstr,
+        $errline
+    );
 
     if ($production_status == 'debug') {
         print "\n<pre class=\"backtrace\" dir=\"ltr\"><code>".txpspecialchars(join("\n", get_caller(10)))."</code></pre>";
@@ -1526,8 +1535,13 @@ function tagErrorHandler($errno, $errstr, $errfile, $errline)
         '{form}' => $txp_current_form,
     ));
 
-    printf("<pre dir=\"auto\">".gTxt('tag_error').' <b>%s</b> -> <b> %s: %s %s</b></pre>',
-            txpspecialchars($txp_current_tag), $error[$errno], $errstr, $locus);
+    printf(
+        "<pre dir=\"auto\">".gTxt('tag_error').' <b>%s</b> -> <b> %s: %s %s</b></pre>',
+        txpspecialchars($txp_current_tag),
+        $error[$errno],
+        $errstr,
+        $locus
+    );
 
     if ($production_status == 'debug') {
         print "\n<pre class=\"backtrace\" dir=\"ltr\"><code>".txpspecialchars(join("\n", get_caller(10)))."</code></pre>";
@@ -1721,8 +1735,12 @@ function publicErrorHandler($errno, $errstr, $errfile, $errline)
         return;
     }
 
-    printf("<pre dir=\"auto\">".gTxt('general_error').' <b>%s: %s on line %s</b></pre>',
-        $error[$errno], $errstr, $errline);
+    printf(
+        "<pre dir=\"auto\">".gTxt('general_error').' <b>%s: %s on line %s</b></pre>',
+        $error[$errno],
+        $errstr,
+        $errline
+    );
 
     if ($production_status == 'debug') {
         print "\n<pre class=\"backtrace\" dir=\"ltr\"><code>".txpspecialchars(join("\n", get_caller(10)))."</code></pre>";
@@ -2094,44 +2112,6 @@ function pluggable_ui($event, $element, $default = '')
 }
 
 /**
- * Gets an attribute from the $theatts global.
- *
- * @param      string $name
- * @param      string $default
- * @return     string
- * @deprecated in 4.2.0
- * @see        lAtts()
- * @package    TagParser
- */
-
-function getAtt($name, $default = null)
-{
-    trigger_error(gTxt('deprecated_function_with', array('{name}' => __FUNCTION__, '{with}' => 'lAtts')), E_USER_NOTICE);
-    global $theseatts;
-
-    return isset($theseatts[$name]) ? $theseatts[$name] : $default;
-}
-
-/**
- * Gets an attribute from the given array.
- *
- * @param      array  $atts
- * @param      string $name
- * @param      string $default
- * @return     string
- * @deprecated in 4.2.0
- * @see        lAtts()
- * @package    TagParser
- */
-
-function gAtt(&$atts, $name, $default = null)
-{
-    trigger_error(gTxt('deprecated_function_with', array('{name}' => __FUNCTION__, '{with}' => 'lAtts')), E_USER_NOTICE);
-
-    return isset($atts[$name]) ? $atts[$name] : $default;
-}
-
-/**
  * Merge the second array into the first array.
  *
  * @param   array $pairs The first array
@@ -2154,24 +2134,6 @@ function lAtts($pairs, $atts, $warn = true)
     }
 
     return ($pairs) ? $pairs : false;
-}
-
-/**
- * Generates All, None and Range selection buttons.
- *
- * @return     string HTML
- * @deprecated in 4.5.0
- * @see        multi_edit()
- * @package    Form
- */
-
-function select_buttons()
-{
-    return
-    gTxt('select').
-    n.fInput('button', 'selall', gTxt('all'), '', 'select all', 'selectall();').
-    n.fInput('button', 'selnone', gTxt('none'), '', 'select none', 'deselectall();').
-    n.fInput('button', 'selrange', gTxt('range'), '', 'select range', 'selectrange();');
 }
 
 /**
@@ -2288,80 +2250,80 @@ function dumbDown($str, $lang = LANG)
 
     if (empty($array[$lang])) {
         $array[$lang] = array( // Nasty, huh?
-            '&#192;' => 'A','&Agrave;' => 'A','&#193;' => 'A','&Aacute;' => 'A','&#194;' => 'A','&Acirc;' => 'A',
-            '&#195;' => 'A','&Atilde;' => 'A','&#196;' => 'Ae','&Auml;' => 'A','&#197;' => 'A','&Aring;' => 'A',
-            '&#198;' => 'Ae','&AElig;' => 'AE',
-            '&#256;' => 'A','&#260;' => 'A','&#258;' => 'A',
-            '&#199;' => 'C','&Ccedil;' => 'C','&#262;' => 'C','&#268;' => 'C','&#264;' => 'C','&#266;' => 'C',
-            '&#270;' => 'D','&#272;' => 'D','&#208;' => 'D','&ETH;' => 'D',
-            '&#200;' => 'E','&Egrave;' => 'E','&#201;' => 'E','&Eacute;' => 'E','&#202;' => 'E','&Ecirc;' => 'E','&#203;' => 'E','&Euml;' => 'E',
-            '&#274;' => 'E','&#280;' => 'E','&#282;' => 'E','&#276;' => 'E','&#278;' => 'E',
-            '&#284;' => 'G','&#286;' => 'G','&#288;' => 'G','&#290;' => 'G',
-            '&#292;' => 'H','&#294;' => 'H',
-            '&#204;' => 'I','&Igrave;' => 'I','&#205;' => 'I','&Iacute;' => 'I','&#206;' => 'I','&Icirc;' => 'I','&#207;' => 'I','&Iuml;' => 'I',
-            '&#298;' => 'I','&#296;' => 'I','&#300;' => 'I','&#302;' => 'I','&#304;' => 'I',
+            '&#192;' => 'A', '&Agrave;' => 'A', '&#193;' => 'A', '&Aacute;' => 'A', '&#194;' => 'A', '&Acirc;' => 'A',
+            '&#195;' => 'A', '&Atilde;' => 'A', '&#196;' => 'Ae', '&Auml;' => 'A', '&#197;' => 'A', '&Aring;' => 'A',
+            '&#198;' => 'Ae', '&AElig;' => 'AE',
+            '&#256;' => 'A', '&#260;' => 'A', '&#258;' => 'A',
+            '&#199;' => 'C', '&Ccedil;' => 'C', '&#262;' => 'C', '&#268;' => 'C', '&#264;' => 'C', '&#266;' => 'C',
+            '&#270;' => 'D', '&#272;' => 'D', '&#208;' => 'D', '&ETH;' => 'D',
+            '&#200;' => 'E', '&Egrave;' => 'E', '&#201;' => 'E', '&Eacute;' => 'E', '&#202;' => 'E', '&Ecirc;' => 'E', '&#203;' => 'E', '&Euml;' => 'E',
+            '&#274;' => 'E', '&#280;' => 'E', '&#282;' => 'E', '&#276;' => 'E', '&#278;' => 'E',
+            '&#284;' => 'G', '&#286;' => 'G', '&#288;' => 'G', '&#290;' => 'G',
+            '&#292;' => 'H', '&#294;' => 'H',
+            '&#204;' => 'I', '&Igrave;' => 'I', '&#205;' => 'I', '&Iacute;' => 'I', '&#206;' => 'I', '&Icirc;' => 'I', '&#207;' => 'I', '&Iuml;' => 'I',
+            '&#298;' => 'I', '&#296;' => 'I', '&#300;' => 'I', '&#302;' => 'I', '&#304;' => 'I',
             '&#306;' => 'IJ',
             '&#308;' => 'J',
             '&#310;' => 'K',
-            '&#321;' => 'K','&#317;' => 'K','&#313;' => 'K','&#315;' => 'K','&#319;' => 'K',
-            '&#209;' => 'N','&Ntilde;' => 'N','&#323;' => 'N','&#327;' => 'N','&#325;' => 'N','&#330;' => 'N',
-            '&#210;' => 'O','&Ograve;' => 'O','&#211;' => 'O','&Oacute;' => 'O','&#212;' => 'O','&Ocirc;' => 'O','&#213;' => 'O','&Otilde;' => 'O',
-            '&#214;' => 'Oe','&Ouml;' => 'Oe',
-            '&#216;' => 'O','&Oslash;' => 'O','&#332;' => 'O','&#336;' => 'O','&#334;' => 'O',
+            '&#321;' => 'K', '&#317;' => 'K', '&#313;' => 'K', '&#315;' => 'K', '&#319;' => 'K',
+            '&#209;' => 'N', '&Ntilde;' => 'N', '&#323;' => 'N', '&#327;' => 'N', '&#325;' => 'N', '&#330;' => 'N',
+            '&#210;' => 'O', '&Ograve;' => 'O', '&#211;' => 'O', '&Oacute;' => 'O', '&#212;' => 'O', '&Ocirc;' => 'O', '&#213;' => 'O', '&Otilde;' => 'O',
+            '&#214;' => 'Oe', '&Ouml;' => 'Oe',
+            '&#216;' => 'O', '&Oslash;' => 'O', '&#332;' => 'O', '&#336;' => 'O', '&#334;' => 'O',
             '&#338;' => 'OE',
-            '&#340;' => 'R','&#344;' => 'R','&#342;' => 'R',
-            '&#346;' => 'S','&#352;' => 'S','&#350;' => 'S','&#348;' => 'S','&#536;' => 'S',
-            '&#356;' => 'T','&#354;' => 'T','&#358;' => 'T','&#538;' => 'T',
-            '&#217;' => 'U','&Ugrave;' => 'U','&#218;' => 'U','&Uacute;' => 'U','&#219;' => 'U','&Ucirc;' => 'U',
-            '&#220;' => 'Ue','&#362;' => 'U','&Uuml;' => 'Ue',
-            '&#366;' => 'U','&#368;' => 'U','&#364;' => 'U','&#360;' => 'U','&#370;' => 'U',
+            '&#340;' => 'R', '&#344;' => 'R', '&#342;' => 'R',
+            '&#346;' => 'S', '&#352;' => 'S', '&#350;' => 'S', '&#348;' => 'S', '&#536;' => 'S',
+            '&#356;' => 'T', '&#354;' => 'T', '&#358;' => 'T', '&#538;' => 'T',
+            '&#217;' => 'U', '&Ugrave;' => 'U', '&#218;' => 'U', '&Uacute;' => 'U', '&#219;' => 'U', '&Ucirc;' => 'U',
+            '&#220;' => 'Ue', '&#362;' => 'U', '&Uuml;' => 'Ue',
+            '&#366;' => 'U', '&#368;' => 'U', '&#364;' => 'U', '&#360;' => 'U', '&#370;' => 'U',
             '&#372;' => 'W',
-            '&#221;' => 'Y','&Yacute;' => 'Y','&#374;' => 'Y','&#376;' => 'Y',
-            '&#377;' => 'Z','&#381;' => 'Z','&#379;' => 'Z',
-            '&#222;' => 'T','&THORN;' => 'T',
-            '&#224;' => 'a','&#225;' => 'a','&#226;' => 'a','&#227;' => 'a','&#228;' => 'ae',
+            '&#221;' => 'Y', '&Yacute;' => 'Y', '&#374;' => 'Y', '&#376;' => 'Y',
+            '&#377;' => 'Z', '&#381;' => 'Z', '&#379;' => 'Z',
+            '&#222;' => 'T', '&THORN;' => 'T',
+            '&#224;' => 'a', '&#225;' => 'a', '&#226;' => 'a', '&#227;' => 'a', '&#228;' => 'ae',
             '&auml;' => 'ae',
-            '&#229;' => 'a','&#257;' => 'a','&#261;' => 'a','&#259;' => 'a','&aring;' => 'a',
+            '&#229;' => 'a', '&#257;' => 'a', '&#261;' => 'a', '&#259;' => 'a', '&aring;' => 'a',
             '&#230;' => 'ae',
-            '&#231;' => 'c','&#263;' => 'c','&#269;' => 'c','&#265;' => 'c','&#267;' => 'c',
-            '&#271;' => 'd','&#273;' => 'd','&#240;' => 'd',
-            '&#232;' => 'e','&#233;' => 'e','&#234;' => 'e','&#235;' => 'e','&#275;' => 'e',
-            '&#281;' => 'e','&#283;' => 'e','&#277;' => 'e','&#279;' => 'e',
+            '&#231;' => 'c', '&#263;' => 'c', '&#269;' => 'c', '&#265;' => 'c', '&#267;' => 'c',
+            '&#271;' => 'd', '&#273;' => 'd', '&#240;' => 'd',
+            '&#232;' => 'e', '&#233;' => 'e', '&#234;' => 'e', '&#235;' => 'e', '&#275;' => 'e',
+            '&#281;' => 'e', '&#283;' => 'e', '&#277;' => 'e', '&#279;' => 'e',
             '&#402;' => 'f',
-            '&#285;' => 'g','&#287;' => 'g','&#289;' => 'g','&#291;' => 'g',
-            '&#293;' => 'h','&#295;' => 'h',
-            '&#236;' => 'i','&#237;' => 'i','&#238;' => 'i','&#239;' => 'i','&#299;' => 'i',
-            '&#297;' => 'i','&#301;' => 'i','&#303;' => 'i','&#305;' => 'i',
+            '&#285;' => 'g', '&#287;' => 'g', '&#289;' => 'g', '&#291;' => 'g',
+            '&#293;' => 'h', '&#295;' => 'h',
+            '&#236;' => 'i', '&#237;' => 'i', '&#238;' => 'i', '&#239;' => 'i', '&#299;' => 'i',
+            '&#297;' => 'i', '&#301;' => 'i', '&#303;' => 'i', '&#305;' => 'i',
             '&#307;' => 'ij',
             '&#309;' => 'j',
-            '&#311;' => 'k','&#312;' => 'k',
-            '&#322;' => 'l','&#318;' => 'l','&#314;' => 'l','&#316;' => 'l','&#320;' => 'l',
-            '&#241;' => 'n','&#324;' => 'n','&#328;' => 'n','&#326;' => 'n','&#329;' => 'n',
+            '&#311;' => 'k', '&#312;' => 'k',
+            '&#322;' => 'l', '&#318;' => 'l', '&#314;' => 'l', '&#316;' => 'l', '&#320;' => 'l',
+            '&#241;' => 'n', '&#324;' => 'n', '&#328;' => 'n', '&#326;' => 'n', '&#329;' => 'n',
             '&#331;' => 'n',
-            '&#242;' => 'o','&#243;' => 'o','&#244;' => 'o','&#245;' => 'o','&#246;' => 'oe',
+            '&#242;' => 'o', '&#243;' => 'o', '&#244;' => 'o', '&#245;' => 'o', '&#246;' => 'oe',
             '&ouml;' => 'oe',
-            '&#248;' => 'o','&#333;' => 'o','&#337;' => 'o','&#335;' => 'o',
+            '&#248;' => 'o', '&#333;' => 'o', '&#337;' => 'o', '&#335;' => 'o',
             '&#339;' => 'oe',
-            '&#341;' => 'r','&#345;' => 'r','&#343;' => 'r',
+            '&#341;' => 'r', '&#345;' => 'r', '&#343;' => 'r',
             '&#353;' => 's',
-            '&#249;' => 'u','&#250;' => 'u','&#251;' => 'u','&#252;' => 'ue','&#363;' => 'u',
+            '&#249;' => 'u', '&#250;' => 'u', '&#251;' => 'u', '&#252;' => 'ue', '&#363;' => 'u',
             '&uuml;' => 'ue',
-            '&#367;' => 'u','&#369;' => 'u','&#365;' => 'u','&#361;' => 'u','&#371;' => 'u',
+            '&#367;' => 'u', '&#369;' => 'u', '&#365;' => 'u', '&#361;' => 'u', '&#371;' => 'u',
             '&#373;' => 'w',
-            '&#253;' => 'y','&#255;' => 'y','&#375;' => 'y',
-            '&#382;' => 'z','&#380;' => 'z','&#378;' => 'z',
+            '&#253;' => 'y', '&#255;' => 'y', '&#375;' => 'y',
+            '&#382;' => 'z', '&#380;' => 'z', '&#378;' => 'z',
             '&#254;' => 't',
             '&#223;' => 'ss',
             '&#383;' => 'ss',
-            '&agrave;' => 'a','&aacute;' => 'a','&acirc;' => 'a','&atilde;' => 'a','&auml;' => 'ae',
-            '&aring;' => 'a','&aelig;' => 'ae','&ccedil;' => 'c','&eth;' => 'd',
-            '&egrave;' => 'e','&eacute;' => 'e','&ecirc;' => 'e','&euml;' => 'e',
-            '&igrave;' => 'i','&iacute;' => 'i','&icirc;' => 'i','&iuml;' => 'i',
+            '&agrave;' => 'a', '&aacute;' => 'a', '&acirc;' => 'a', '&atilde;' => 'a', '&auml;' => 'ae',
+            '&aring;' => 'a', '&aelig;' => 'ae', '&ccedil;' => 'c', '&eth;' => 'd',
+            '&egrave;' => 'e', '&eacute;' => 'e', '&ecirc;' => 'e', '&euml;' => 'e',
+            '&igrave;' => 'i', '&iacute;' => 'i', '&icirc;' => 'i', '&iuml;' => 'i',
             '&ntilde;' => 'n',
-            '&ograve;' => 'o','&oacute;' => 'o','&ocirc;' => 'o','&otilde;' => 'o','&ouml;' => 'oe',
+            '&ograve;' => 'o', '&oacute;' => 'o', '&ocirc;' => 'o', '&otilde;' => 'o', '&ouml;' => 'oe',
             '&oslash;' => 'o',
-            '&ugrave;' => 'u','&uacute;' => 'u','&ucirc;' => 'u','&uuml;' => 'ue',
-            '&yacute;' => 'y','&yuml;' => 'y',
+            '&ugrave;' => 'u', '&uacute;' => 'u', '&ucirc;' => 'u', '&uuml;' => 'ue',
+            '&yacute;' => 'y', '&yuml;' => 'y',
             '&thorn;' => 't',
             '&szlig;' => 'ss',
         );
@@ -2385,7 +2347,6 @@ function dumbDown($str, $lang = LANG)
                     $array[$lang] = array_merge($array[$lang], $i18n[$lang]);
                 }
             }
-
             // Load an old file (no sections) just in case.
             else {
                 $array[$lang] = array_merge($array[$lang], $i18n);
@@ -2753,7 +2714,6 @@ function stripPHP($in)
 
 function event_category_popup($name, $cat = '', $id = '')
 {
-    $arr = array('');
     $rs = getTree('root', $name);
 
     if ($rs) {
@@ -2926,41 +2886,6 @@ function event_change_pageby($name = null)
     $GLOBALS[$pageby] = $prefs[$pageby] = $qty;
 
     set_pref($pageby, $qty, $event, PREF_HIDDEN, 'text_input', 0, PREF_PRIVATE);
-}
-
-/**
- * Generates a multi-edit widget.
- *
- * @param      string $name
- * @param      array  $methods
- * @param      int    $page
- * @param      string $sort
- * @param      string $dir
- * @param      string $crit
- * @param      string $search_method
- * @deprecated in 4.5.0
- * @see        multi_edit()
- * @package    Form
- */
-
-function event_multiedit_form($name, $methods = null, $page, $sort, $dir, $crit, $search_method)
-{
-    $method = ps('edit_method');
-
-    if ($methods === null) {
-        $methods = array(
-            'delete' => gTxt('delete'),
-        );
-    }
-
-    return '<label for="withselected">'.gTxt('with_selected').'</label>'.
-        n.selectInput('edit_method', $methods, $method, 1, ' id="withselected" onchange="poweredit(this); return false;"').
-        n.eInput($name).
-        n.sInput($name.'_multi_edit').
-        n.hInput('page', $page).
-        ($sort ? n.hInput('sort', $sort).n.hInput('dir', $dir) : '').
-        (($crit != '') ? n.hInput('crit', $crit).n.hInput('search_method', $search_method) : '').
-        n.fInput('submit', '', gTxt('go'));
 }
 
 /**
@@ -3175,6 +3100,7 @@ function safe_strtotime($time_str)
 
     // tz_offset calculations are expensive
     $tz_offset = tz_offset($ts);
+
     return strtotime($time_str, time() + $tz_offset) - $tz_offset;
 }
 
@@ -3400,7 +3326,7 @@ function make_download_link($id, $label = '', $filename = '')
     // Do not use the array() form of passing $atts to href().
     // Doing so breaks download links on the admin side due to
     // double-encoding of the ampersands.
-    return href($label, $url, ' title = "' . gTxt('download') . '"');
+    return href($label, $url, ' title = "'.gTxt('download').'"');
 }
 
 /**
@@ -3471,7 +3397,7 @@ function upload_get_errormsg($err_code)
             $msg = gTxt('upload_err_ini_size');
             break;
         // Value: 2; The uploaded file exceeds the MAX_FILE_SIZE directive that was specified in the HTML form.
-        case UPLOAD_ERR_FORM_SIZE :
+        case UPLOAD_ERR_FORM_SIZE:
             $msg = gTxt('upload_err_form_size');
             break;
         // Value: 3; The uploaded file was only partially uploaded.
@@ -3607,54 +3533,6 @@ function fileDownloadFormatTime($params)
     }
 
     return '';
-}
-
-/**
- * Checks if the system is Windows.
- *
- * Exists for backwards compatibility.
- *
- * @return     bool
- * @deprecated in 4.3.0
- * @see        IS_WIN
- * @package    System
- */
-
-function is_windows()
-{
-    return IS_WIN;
-}
-
-/**
- * Checks if PHP is run as CGI.
- *
- * Exists for backwards compatibility.
- *
- * @return     bool
- * @deprecated in 4.3.0
- * @see        IS_CGI
- * @package    System
- */
-
-function is_cgi()
-{
-    return IS_CGI;
-}
-
-/**
- * Checks if PHP is run as Apache module.
- *
- * Exists for backwards compatibility.
- *
- * @return     bool
- * @deprecated in 4.3.0
- * @see        IS_APACHE
- * @package    System
- */
-
-function is_mod_php()
-{
-    return IS_APACHE;
 }
 
 /**
@@ -4287,7 +4165,7 @@ function generate_user_token($ref, $type, $expiryTimestamp, $pass, $nonce)
     // Using the selector in the hash just injects randomness, otherwise two requests
     // back-to-back would generate the same code.
     // Old requests for the same user id are purged when password is set.
-    $token = bin2hex(pack('H*', substr(hash(HASHING_ALGORITHM, $nonce . $selector . $pass), 0, SALT_LENGTH)));
+    $token = bin2hex(pack('H*', substr(hash(HASHING_ALGORITHM, $nonce.$selector.$pass), 0, SALT_LENGTH)));
     $user_token = $token.$selector;
 
     // Remove any previous activation tokens and insert the new one.
@@ -4338,7 +4216,7 @@ function EvalElse($thing, $condition)
     }
 
     for ($out = $tag[$first - 1]; $first <= $last; $first++) {
-        $out .= $tag[$first][0] . $tag[$first][3] . $tag[$first][4] . $tag[++$first];
+        $out .= $tag[$first][0].$tag[$first][3].$tag[$first][4].$tag[++$first];
     }
 
     return $out;
@@ -4670,40 +4548,51 @@ function get_lastmod($unix_ts = null)
 
 function handle_lastmod($unix_ts = null, $exit = true)
 {
-    if (get_pref('send_lastmod') && get_pref('production_status') == 'live') {
+    // Disable caching when not in production
+    if (get_pref('production_status') != 'live') {
+        header('Cache-Control: no-cache, no-store, max-age=0');
+    }
+
+    elseif (get_pref('send_lastmod') && get_pref('production_status') == 'live') {
         $unix_ts = get_lastmod($unix_ts);
 
         // Make sure lastmod isn't in the future.
         $unix_ts = min($unix_ts, time());
 
-        // Or too far in the past (7 days).
-        $unix_ts = max($unix_ts, time() - 3600 * 24 * 7);
-
         $last = safe_strftime('rfc822', $unix_ts, 1);
         header("Last-Modified: $last");
-        header('Cache-Control: no-cache');
 
-        $hims = serverSet('HTTP_IF_MODIFIED_SINCE');
+        $etag = base_convert($unix_ts, 10, 32);
+        header('ETag: "' . $etag . '"');
 
-        if ($hims and @strtotime($hims) >= $unix_ts) {
+        // Get timestamp from request caching headers
+        if (isset($_SERVER['HTTP_IF_MODIFIED_SINCE'])) {
+            $hims = $_SERVER['HTTP_IF_MODIFIED_SINCE'];
+            $imsd = ($hims) ? strtotime($hims) : 0;
+        } elseif (isset($_SERVER['HTTP_IF_NONE_MATCH'])) {
+            $hinm = trim(trim($_SERVER['HTTP_IF_NONE_MATCH']), '"');
+            $hinm_apache_gzip_workaround = explode('-gzip', $hinm);
+            $hinm_apache_gzip_workaround = $hinm_apache_gzip_workaround[0];
+            $inmd = ($hinm) ? base_convert($hinm_apache_gzip_workaround, 32, 10) : 0;
+        }
+
+        // Check request timestamps against the current timestamp
+        if ((isset($imsd) && $imsd >= $unix_ts) ||
+            (isset($inmd) && $inmd >= $unix_ts)) {
             log_hit('304');
-
-            if (!$exit) {
-                return array('304', $last);
-            }
-
-            txp_status_header('304 Not Modified');
 
             header('Content-Length: 0');
 
-            // Discard all output.
-            while (@ob_end_clean());
-            exit;
+            txp_status_header('304 Not Modified');
+
+            if ($exit) {
+                exit();
+            }
+
+            return array('304', $last);
         }
 
-        if (!$exit) {
-            return array('200', $last);
-        }
+        return array('200', $last);
     }
 }
 
@@ -5210,7 +5099,7 @@ function txp_die($msg, $status = '503', $url = '')
     if ($url && in_array($code, array(301, 302, 303, 307))) {
         ob_end_clean();
         header("Location: $url", true, $code);
-        die('<html><head><meta http-equiv="refresh" content="0;URL='.txpspecialchars($url).'"></head><body></body></html>');
+        die('<html><head><meta http-equiv="refresh" content="0;URL='.txpspecialchars($url).'"></head><body><p>Document has <a href="'.txpspecialchars($url).'">moved here</a>.</p></body></html>');
     }
 
     if ($connected && @txpinterface == 'public') {
@@ -5225,6 +5114,7 @@ function txp_die($msg, $status = '503', $url = '')
 <html lang="en">
 <head>
    <meta charset="utf-8">
+   <meta name="robots" content="noindex">
    <title>Textpattern Error: <txp:error_status /></title>
 </head>
 <body>
@@ -5234,7 +5124,7 @@ function txp_die($msg, $status = '503', $url = '')
 eod;
     }
 
-    header("Content-type: text/html; charset=utf-8");
+    header("Content-Type: text/html; charset=utf-8");
 
     if (is_callable('parse')) {
         $txp_error_message = $msg;
@@ -5672,7 +5562,9 @@ function do_list_unique($list, $delim = ',', $flags = TEXTPATTERN_STRIP_EMPTY_ST
     }
 
     if ($flags & TEXTPATTERN_STRIP_EMPTY_STRING) {
-        $out = array_filter($out, function ($v) {return ($v=='') ? false : true;});
+        $out = array_filter($out, function ($v) {
+            return ($v=='') ? false : true;
+        });
     }
 
     return $out;
@@ -5886,7 +5778,7 @@ function getMetaDescription($type = null)
         } elseif ($thisarticle) {
             $content = $thisarticle['description'];
         } elseif ($c) {
-            $content = safe_field("description", 'txp_category', "name = '".doSlash($c)."' AND type = '" . doSlash($context) . "'");
+            $content = safe_field("description", 'txp_category', "name = '".doSlash($c)."' AND type = '".doSlash($context)."'");
         } elseif ($s) {
             $content = safe_field("description", 'txp_section', "name = '".doSlash($s)."'");
         }
@@ -5904,7 +5796,7 @@ function getMetaDescription($type = null)
                 }
 
                 $clause = " AND type = '".$thisContext."'";
-                $content = safe_field("description", 'txp_category', "name = '".doSlash($c)."'" . $clause);
+                $content = safe_field("description", 'txp_category', "name = '".doSlash($c)."'".$clause);
             }
         } elseif ($type === 'section') {
             $theSection = ($thissection) ? $thissection['name'] : $s;
